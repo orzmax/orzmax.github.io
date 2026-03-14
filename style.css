@@ -409,50 +409,6 @@ body[data-page="image"] .header .mode-toggle {
   color: var(--muted);
 }
 
-/* ===== PSL Score card (strict 1.0–8.0 scale) ===== */
-.psl-container {
-  margin-bottom: 1rem;
-}
-
-.psl-card {
-  background: linear-gradient(135deg, rgba(0, 212, 170, 0.08) 0%, var(--bg) 100%);
-  border: 1px solid var(--accent-dim);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius);
-  padding: 1rem 1.25rem;
-  text-align: center;
-}
-
-.psl-card .psl-title {
-  margin: 0 0 0.35rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.psl-card .psl-value {
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
-.psl-card .psl-tier {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-top: 0.25rem;
-}
-
-.psl-card .psl-label {
-  font-size: 0.7rem;
-  color: var(--muted);
-  margin-top: 0.35rem;
-}
-
 /* ===== Metric cards (legend system: left border = canvas color) ===== */
 .metric-card {
   background: var(--bg);

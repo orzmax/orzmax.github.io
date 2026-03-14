@@ -261,72 +261,6 @@
     facialConvexity: '#8888a0',
   };
 
-  // ---------- PSL Scoring Engine: configuration (ideals & weights) ----------
-  const PSL_CONFIG = {
-    canthalTilt:      { idealMin: 4,   idealMax: 7,   worst: -5,   weight: 0.20 },
-    palpebralFissure: { idealMin: 3.0, idealMax: 4.0, worst: 2.0,  weight: 0.15 },
-    fwhr:             { idealMin: 1.8, idealMax: 2.0, worst: 1.5,  weight: 0.15 },
-    midfaceRatio:     { idealMin: 0.95, idealMax: 1.05, worst: 1.25, weight: 0.15 },
-    bigonialBizy:     { idealMin: 0.85, idealMax: 0.95, worst: 0.70, weight: 0.10 },
-    gonialAngle:      { idealMin: 110, idealMax: 125, worst: 145,  weight: 0.15 },
-    philtrumChin:     { idealMin: 0.4, idealMax: 0.5, worst: 0.7,   weight: 0.10 },
-  };
-
-  /**
-   * Penalty math (0–100 scale). Returns this metric's contribution to TotalHarmonyPercentage.
-   * - If value is in [idealMin, idealMax], return 100% of weight.
-   * - If value is outside, linear penalty toward worst limit (0% at/beyond worst).
-   * - If value is null (missing), treat as ideal: return full weight.
-   */
-  function calculateMetricScore(value, idealMin, idealMax, worst, weight) {
-    if (value == null || Number.isNaN(value)) return weight;
-    if (value >= idealMin && value <= idealMax) return weight;
-    const rangeToWorst = worst < idealMin ? idealMin - worst : worst - idealMax;
-    const nearestBound = value < idealMin ? idealMin : idealMax;
-    const distanceTowardWorst = Math.abs(value - nearestBound);
-    const ratio = Math.min(1, distanceTowardWorst / rangeToWorst);
-    return Math.max(0, (1 - ratio)) * weight;
-  }
-
-  /**
-   * Maps 0–100 harmony percentage to strict 1.0–8.0 PSL scale.
-   * Bell-style curve: ~50% → 5.0, ~80% → 7.0. Hard cap at 8.0, one decimal.
-   */
-  function mapToPSL(harmonyPercentage) {
-    if (harmonyPercentage <= 0) return 1.0;
-    const t = harmonyPercentage / 100;
-    const curve = Math.pow(t, 0.85);
-    const score = 1 + curve * 7;
-    return Math.min(parseFloat(score.toFixed(1)), 8.0);
-  }
-
-  /**
-   * Ultra-granular tier classification for PSL score (strict 1.0–8.0 scale).
-   */
-  function getPSLTierName(score) {
-    if (score < 2.0) return 'Sub1';
-    if (score < 3.0) return 'Sub2';
-    if (score < 3.5) return 'Sub3';
-    if (score < 4.0) return 'Sub4';
-    if (score < 4.3) return 'Sub5';
-    if (score < 4.5) return 'LLTN';
-    if (score < 4.7) return 'MLTN';
-    if (score < 4.9) return 'HLTN';
-    if (score < 5.1) return 'LMTN';
-    if (score < 5.3) return 'MMTN';
-    if (score < 5.5) return 'HMTN';
-    if (score < 5.7) return 'LHTN';
-    if (score < 5.9) return 'MHTN';
-    if (score < 6.1) return 'HHTN';
-    if (score < 6.4) return 'LCL';
-    if (score < 6.7) return 'MCL';
-    if (score < 7.0) return 'HCL';
-    if (score < 7.3) return 'LC';
-    if (score < 7.6) return 'MC';
-    if (score < 8.0) return 'HC';
-    return 'Adam';
-  }
-
   const DOT_RADIUS = 1.5;
   const LINE_WIDTH_BASE = 1;
   const DEFAULT_OPACITY = 0.3;
@@ -525,9 +459,9 @@
   }
 
   // ---------- Profile turn detection: nose-to-eye horizontal distance ratio ----------
-  // MediaPipe loses tracking at full 90°. Allow 3/4 profile (~60–75°): if distance to one eye
-  // is less than 25% of distance to the other, face is validly turned for Profile Mode.
-  const PROFILE_EYE_RATIO_THRESHOLD = 0.25;
+  // Relaxed so image analyzer and camera accept more angles (e.g. 3/4 and half profile).
+  // Ratio: when one eye is closer to nose than the other, min/max < threshold = valid profile.
+  const PROFILE_EYE_RATIO_THRESHOLD = 0.6;
 
   /** Horizontal distance (pixels) from nose tip to left/right eye. */
   function getNoseToEyeDistances(landmarks, width, height) {
@@ -540,7 +474,7 @@
     return { distToLeft, distToRight };
   }
 
-  /** True when face is validly turned for profile: one eye much closer to nose than the other (< 25% ratio). */
+  /** True when face is validly turned for profile: one eye closer to nose than the other (ratio < threshold). */
   function isProfileTurnEnough(landmarks, width, height) {
     const d = getNoseToEyeDistances(landmarks, width, height);
     if (!d) return false;
@@ -1043,120 +977,16 @@
     return metrics;
   }
 
-  // ---------- PSL: raw inputs from frontal/profile captures ----------
-  function getRawPSLInputsFromFrontal(landmarks, width, height) {
-    if (!landmarks || !width || !height) return null;
-    const g = (i) => getLandmark(landmarks, i, width, height);
-    const leftInner = g(LANDMARKS.LEFT_EYE_INNER), leftOuter = g(LANDMARKS.LEFT_EYE_OUTER);
-    const rightInner = g(LANDMARKS.RIGHT_EYE_INNER), rightOuter = g(LANDMARKS.RIGHT_EYE_OUTER);
-    const canthalComp = canthalTiltWithHeadRollCompensation(leftInner, leftOuter, rightInner, rightOuter);
-    const canthalTilt = (canthalComp.leftDeg + canthalComp.rightDeg) / 2;
-
-    const leftTop = g(LANDMARKS.LEFT_EYE_TOP), leftBottom = g(LANDMARKS.LEFT_EYE_BOTTOM);
-    const rightTop = g(LANDMARKS.RIGHT_EYE_TOP), rightBottom = g(LANDMARKS.RIGHT_EYE_BOTTOM);
-    const leftWidth = euclidean2D(leftInner, leftOuter);
-    const leftHeight = euclidean2D(leftTop, leftBottom);
-    const rightWidth = euclidean2D(rightInner, rightOuter);
-    const rightHeight = euclidean2D(rightTop, rightBottom);
-    const leftPF = leftHeight > 0 ? leftWidth / leftHeight : 0;
-    const rightPF = rightHeight > 0 ? rightWidth / rightHeight : 0;
-    const palpebralFissure = (leftPF + rightPF) / 2;
-
-    const leftCheek = g(LANDMARKS.LEFT_CHEEK), rightCheek = g(LANDMARKS.RIGHT_CHEEK);
-    const glabella = g(LANDMARKS.GLABELLA), philtrumTop = g(LANDMARKS.PHILTRUM_TOP);
-    const bizygomaticWidth = euclidean2D(leftCheek, rightCheek);
-    const upperFaceHeight = euclidean2D(glabella, philtrumTop);
-    const fwhr = upperFaceHeight > 0 ? bizygomaticWidth / upperFaceHeight : 0;
-
-    const leftIris = landmarks[LANDMARKS.LEFT_IRIS_CENTER];
-    const rightIris = landmarks[LANDMARKS.RIGHT_IRIS_CENTER];
-    let midfaceRatio = 0;
-    if (leftIris && rightIris) {
-      const leftP = toPixel(leftIris, width, height);
-      const rightP = toPixel(rightIris, width, height);
-      const ipd = euclidean2D(leftP, rightP);
-      const midY = (leftP.y + rightP.y) / 2;
-      const pupilToLip = Math.abs(midY - philtrumTop.y);
-      midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
-    } else {
-      const leftMid = { x: (leftInner.x + leftOuter.x) / 2, y: (leftInner.y + leftOuter.y) / 2 };
-      const rightMid = { x: (rightInner.x + rightOuter.x) / 2, y: (rightInner.y + rightOuter.y) / 2 };
-      const ipd = euclidean2D(leftMid, rightMid);
-      const midY = (leftMid.y + rightMid.y) / 2;
-      const pupilToLip = Math.abs(midY - philtrumTop.y);
-      midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
-    }
-
-    const jawP1 = g(LANDMARKS.LEFT_GONION), jawP2 = g(LANDMARKS.RIGHT_GONION);
-    const leftGonion = jawP1 && jawP2 && jawP1.x <= jawP2.x ? jawP1 : jawP2;
-    const rightGonion = jawP1 && jawP2 && jawP1.x > jawP2.x ? jawP1 : jawP2;
-    const bigonialWidth = euclidean2D(leftGonion, rightGonion);
-    const bigonialBizy = bizygomaticWidth > 0 ? bigonialWidth / bizygomaticWidth : 0;
-
-    const subnasale = g(LANDMARKS.SUBNASALE), upperLipTop = g(LANDMARKS.UPPER_LIP_TOP);
-    const lowerLipBottom = g(LANDMARKS.LOWER_LIP_BOTTOM), menton = g(LANDMARKS.MENTON);
-    const philtrumLen = euclidean2D(subnasale, upperLipTop);
-    const chinLen = euclidean2D(lowerLipBottom, menton);
-    const philtrumChin = chinLen > 0 ? philtrumLen / chinLen : 0;
-
-    return { canthalTilt, palpebralFissure, fwhr, midfaceRatio, bigonialBizy, philtrumChin };
-  }
-
-  function getRawPSLInputsFromProfile(landmarks, width, height, profileSide) {
-    if (!landmarks || !width || !height) return null;
-    const side = profileSide ?? getProfileSide(landmarks, width, height);
-    const gonialPoints = getProfileGonialPoints(landmarks, width, height, side);
-    if (!gonialPoints) return null;
-    const { tragion, gonion, menton } = gonialPoints;
-    const gonialAngle = gonialAngleLawOfCosines(tragion, gonion, menton);
-    return { gonialAngle };
-  }
-
-  /** Combines frontal + profile captures; missing metrics contribute as ideal (null → full weight). */
-  function getRawPSLInputs() {
-    const frontal = capturedStateFrontal ? getRawPSLInputsFromFrontal(capturedStateFrontal.landmarks, capturedStateFrontal.width, capturedStateFrontal.height) : null;
-    const profile = capturedStateProfile ? getRawPSLInputsFromProfile(capturedStateProfile.landmarks, capturedStateProfile.width, capturedStateProfile.height, capturedStateProfile.profileSide) : null;
-    return {
-      canthalTilt: frontal?.canthalTilt ?? null,
-      palpebralFissure: frontal?.palpebralFissure ?? null,
-      fwhr: frontal?.fwhr ?? null,
-      midfaceRatio: frontal?.midfaceRatio ?? null,
-      bigonialBizy: frontal?.bigonialBizy ?? null,
-      philtrumChin: frontal?.philtrumChin ?? null,
-      gonialAngle: profile?.gonialAngle ?? null,
-    };
-  }
-
-  /** Returns { totalHarmonyPercentage, pslScore, tierName }. Uses ideal for any null raw value. */
-  function computePSL(raw) {
-    const c = PSL_CONFIG;
-    const sum =
-      calculateMetricScore(raw.canthalTilt, c.canthalTilt.idealMin, c.canthalTilt.idealMax, c.canthalTilt.worst, c.canthalTilt.weight) +
-      calculateMetricScore(raw.palpebralFissure, c.palpebralFissure.idealMin, c.palpebralFissure.idealMax, c.palpebralFissure.worst, c.palpebralFissure.weight) +
-      calculateMetricScore(raw.fwhr, c.fwhr.idealMin, c.fwhr.idealMax, c.fwhr.worst, c.fwhr.weight) +
-      calculateMetricScore(raw.midfaceRatio, c.midfaceRatio.idealMin, c.midfaceRatio.idealMax, c.midfaceRatio.worst, c.midfaceRatio.weight) +
-      calculateMetricScore(raw.bigonialBizy, c.bigonialBizy.idealMin, c.bigonialBizy.idealMax, c.bigonialBizy.worst, c.bigonialBizy.weight) +
-      calculateMetricScore(raw.gonialAngle, c.gonialAngle.idealMin, c.gonialAngle.idealMax, c.gonialAngle.worst, c.gonialAngle.weight) +
-      calculateMetricScore(raw.philtrumChin, c.philtrumChin.idealMin, c.philtrumChin.idealMax, c.philtrumChin.worst, c.philtrumChin.weight);
-    const totalHarmonyPercentage = sum * 100;
-    const pslScore = mapToPSL(totalHarmonyPercentage);
-    const tierName = getPSLTierName(pslScore);
-    return { totalHarmonyPercentage, pslScore, tierName };
-  }
-
   // ---------- Dashboard ----------
-  const pslRoot = document.getElementById('pslRoot');
-
   function renderMetrics(metrics) {
     if (!metrics.length) {
       const msg = isProfileMode
-        ? 'No face detected. Face the camera first, then slowly turn your head to the side (~50–70°).'
-        : 'No face detected. Look at the camera.';
+        ? (isImagePage ? 'No face detected. Use a 3/4 profile image.' : 'No face detected. Face the camera first, then slowly turn your head to the side (~50–70°).')
+        : (isImagePage ? 'No face detected.' : 'No face detected. Look at the camera.');
       metricsRoot.innerHTML = `<p class="metric-label">${msg}</p>`;
-      if (pslRoot) pslRoot.innerHTML = '';
       return;
     }
-    const cardsHtml = metrics
+    metricsRoot.innerHTML = metrics
       .map(
         (m) => {
           const key = m.key || 'alarBase';
@@ -1172,24 +1002,6 @@
         }
       )
       .join('');
-    metricsRoot.innerHTML = cardsHtml;
-
-    if (pslRoot) {
-      const raw = getRawPSLInputs();
-      const hasAny = raw.canthalTilt != null || raw.palpebralFissure != null || raw.fwhr != null || raw.midfaceRatio != null || raw.bigonialBizy != null || raw.philtrumChin != null || raw.gonialAngle != null;
-      if (hasAny) {
-        const { totalHarmonyPercentage, pslScore, tierName } = computePSL(raw);
-        pslRoot.innerHTML = `
-          <div class="psl-card">
-            <h3 class="psl-title">PSL Score</h3>
-            <div class="psl-value">${pslScore.toFixed(1)}</div>
-            <div class="psl-tier">${tierName}</div>
-            <div class="psl-label">Harmony ${totalHarmonyPercentage.toFixed(1)}% · Cap 8.0</div>
-          </div>`;
-      } else {
-        pslRoot.innerHTML = '';
-      }
-    }
   }
 
   function setupMetricCardHover() {
@@ -1216,7 +1028,7 @@
       clearOverlay();
       if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
         hint.textContent = isImagePage && analyzingForProfileMode
-          ? 'No face detected or face not turned enough. Upload a clear side profile image.'
+          ? 'No face detected. Try a clearer side image or a slightly less extreme angle.'
           : 'No face detected in image. Try another or use the camera.';
         if (hintSub) { hintSub.textContent = ''; hintSub.classList.add('empty'); }
         renderMetrics([]);
