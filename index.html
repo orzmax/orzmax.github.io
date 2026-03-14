@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>orz's facial proportion analysis</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="page-home">
+  <header class="header">
+    <span class="header-credit">created by @orz on .org</span>
+    <h1>orz's facial proportion analysis</h1>
+  </header>
+
+  <main class="home-main">
+    <section class="home-intro">
+      <h2>How does it work?</h2>
+      <p>
+        Pick <strong>Analyze with camera</strong> or <strong>Analyze from image</strong>. With the camera, allow access and hold still
+        for about a second; the app auto-captures a frame. With an image, paste (Ctrl+V) or upload a photo. Either way, the app runs
+        <strong>Google MediaPipe Face Mesh</strong> in your browser: a lightweight model that detects <strong>468 3D facial landmarks</strong>
+        (eyes, nose, lips, jaw, etc.) from that frame via JavaScript and WebAssembly. No server uploads. From those points it computes
+        geometric metrics (canthal tilt, fWHR, philtrum-to-chin ratio, gonial angle, and more) in pixel space. Use the
+        <strong>Frontal / Side</strong> toggle to switch views: capture or upload a frontal shot for frontal metrics, and a separate
+        side shot for profile metrics (gonial angle, facial convexity).
+      </p>
+    </section>
+
+    <nav class="home-actions">
+      <a href="camera.html" class="home-card home-card-camera">
+        <span class="home-card-icon" aria-hidden="true">📷</span>
+        <h3>Analyze with camera</h3>
+        <p>Use your webcam for live analysis. Hold still to auto-capture frontal or side view.</p>
+      </a>
+      <a href="image.html" class="home-card home-card-image">
+        <span class="home-card-icon" aria-hidden="true">🖼️</span>
+        <h3>Analyze from image</h3>
+        <p>Paste or upload a photo to analyze. No camera required.</p>
+      </a>
+    </nav>
+  </main>
+</body>
+</html>
