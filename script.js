@@ -331,14 +331,7 @@
     let opacity, lineWidth, lineOpacity;
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    // Canthal tilt: angle between horizontal through inner canthus and line inner→outer. Draw both (short reference segment).
-    const horizLen = 10;
-    const ix = rightInner.x - leftInner.x, iy = rightInner.y - leftInner.y;
-    const ilen = Math.hypot(ix, iy) || 1;
-    const leftHorizEnd = { x: leftInner.x + (ix / ilen) * horizLen, y: leftInner.y + (iy / ilen) * horizLen };
-    const rightHorizEnd = { x: rightInner.x - (ix / ilen) * horizLen, y: rightInner.y - (iy / ilen) * horizLen };
-    drawLine(ctx, leftInner, leftHorizEnd, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity * 0.7);
-    drawLine(ctx, rightInner, rightHorizEnd, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity * 0.7);
+    // Canthal tilt: draw only the segment from inner to outer canthus (no extension past corners).
     drawLine(ctx, leftInner, leftOuter, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity);
     drawLine(ctx, rightInner, rightOuter, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity);
     drawDot(ctx, leftInner, METRIC_COLORS.canthalTilt, opacity, dr());
