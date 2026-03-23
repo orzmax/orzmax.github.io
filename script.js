@@ -102,6 +102,48 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  /** Scalar distance from `origin` along the ray toward `end` at which `p` projects (2D, pixels). */
+  function projDistAlongSegment(origin, end, p) {
+    if (!origin || !end || !p) return NaN;
+    const dx = end.x - origin.x;
+    const dy = end.y - origin.y;
+    const L = Math.hypot(dx, dy);
+    if (L === 0) return NaN;
+    return ((p.x - origin.x) * dx + (p.y - origin.y) * dy) / L;
+  }
+
+  /** Point at distance `distAlong` from `origin` toward `end` (same direction as segment, may extend past `end`). */
+  function pointAtDistAlongSegment(origin, end, distAlong) {
+    if (!origin || !end || !Number.isFinite(distAlong)) return null;
+    const dx = end.x - origin.x;
+    const dy = end.y - origin.y;
+    const L = Math.hypot(dx, dy);
+    if (L === 0) return null;
+    const t = distAlong / L;
+    return { x: origin.x + t * dx, y: origin.y + t * dy };
+  }
+
+  /**
+   * Facial thirds along the Trichion→Menton axis: segment lengths are projections onto that line so
+   * top + middle + lower equals facial height (when landmarks are ordered along the axis).
+   */
+  function facialThirdsProjectedOntoTM(trichion, glabella, subnasale, menton) {
+    const faceHeight = euclidean2D(trichion, menton);
+    if (!trichion || !glabella || !subnasale || !menton || faceHeight === 0) {
+      return { faceHeight: faceHeight || 0, topLen: NaN, midLen: NaN, lowerLen: NaN };
+    }
+    const h = faceHeight;
+    const tG = projDistAlongSegment(trichion, menton, glabella);
+    const tSn = projDistAlongSegment(trichion, menton, subnasale);
+    if (!Number.isFinite(tG) || !Number.isFinite(tSn)) {
+      return { faceHeight: h, topLen: NaN, midLen: NaN, lowerLen: NaN };
+    }
+    const topLen = Math.max(0, tG);
+    const midLen = Math.max(0, tSn - tG);
+    const lowerLen = Math.max(0, h - tSn);
+    return { faceHeight: h, topLen, midLen, lowerLen };
+  }
+
   /**
    * Canthal tilt angle for one eye in degrees.
    * Definition: angle between (1) a horizontal line through the inner corner (medial canthus) and
@@ -121,37 +163,37 @@
   }
 
   /**
-   * Head-roll-compensated canthal tilt. Measures tilt relative to the facial horizon (intercanthal line 133–362).
-   * Uses same inverted-Y logic: facial horizon angle from left inner (133) to right inner (362).
-   * Returns { leftDeg, rightDeg } with "outer corner higher than inner" = POSITIVE for both eyes.
+   * Signed tilt of segment inner→outer vs facial horizon (intercanthal line medial L→medial R).
+   * Same convention as canthalTiltEyeAngleDeg: lateral point higher than medial → positive.
+   * Result in [-90°, 90°] so left/right sides are comparable (raw atan2 would show ~±180° on one side).
    */
-  function canthalTiltWithHeadRollCompensation(leftInner, leftOuter, rightInner, rightOuter) {
-    if (!leftInner || !leftOuter || !rightInner || !rightOuter) return { leftDeg: 0, rightDeg: 0 };
-
+  function segmentTiltVsIntercanthalHorizonDeg(segmentInner, segmentOuter, intercanthalLeft, intercanthalRight) {
+    if (!segmentInner || !segmentOuter || !intercanthalLeft || !intercanthalRight) return 0;
     const toDeg = 180 / Math.PI;
-
-    // 1. Facial horizon: angle of line from left inner (133) to right inner (362). Inverted Y: same convention.
-    const horizonDx = rightInner.x - leftInner.x;
-    const horizonDy = rightInner.y - leftInner.y; // canvas: right down => horizonDy > 0
+    const horizonDx = intercanthalRight.x - intercanthalLeft.x;
+    const horizonDy = intercanthalRight.y - intercanthalLeft.y;
     const headRollAngleRad = Math.atan2(horizonDy, horizonDx);
-
-    // 2. Raw angles in degrees (already positive when outer is higher)
-    const leftRawDeg = canthalTiltEyeAngleDeg(leftInner, leftOuter);
-    const rightRawDeg = canthalTiltEyeAngleDeg(rightInner, rightOuter);
-
-    // 3. Convert raw to radians, subtract head roll, back to degrees and normalize to [-90, 90]
+    const rawDeg = canthalTiltEyeAngleDeg(segmentInner, segmentOuter);
     const normalize90 = (deg) => {
       let d = deg;
       while (d > 90) d -= 180;
       while (d < -90) d += 180;
       return d;
     };
-    const leftRelativeRad = (leftRawDeg * Math.PI) / 180 - headRollAngleRad;
-    const rightRelativeRad = (rightRawDeg * Math.PI) / 180 - headRollAngleRad;
-    const leftDeg = normalize90(leftRelativeRad * toDeg);
-    const rightDeg = normalize90(rightRelativeRad * toDeg);
+    const relativeRad = (rawDeg * Math.PI) / 180 - headRollAngleRad;
+    return normalize90(relativeRad * toDeg);
+  }
 
-    return { leftDeg, rightDeg };
+  /**
+   * Head-roll-compensated canthal tilt. Measures tilt relative to the facial horizon (intercanthal line 133–362).
+   * Returns { leftDeg, rightDeg } with "outer corner higher than inner" = POSITIVE for both eyes.
+   */
+  function canthalTiltWithHeadRollCompensation(leftInner, leftOuter, rightInner, rightOuter) {
+    if (!leftInner || !leftOuter || !rightInner || !rightOuter) return { leftDeg: 0, rightDeg: 0 };
+    return {
+      leftDeg: segmentTiltVsIntercanthalHorizonDeg(leftInner, leftOuter, leftInner, rightInner),
+      rightDeg: segmentTiltVsIntercanthalHorizonDeg(rightInner, rightOuter, leftInner, rightInner),
+    };
   }
 
   /** Angle at vertex b (a–b–c) in degrees [0, 180]. All pixel coords. */
@@ -182,6 +224,368 @@
     const cosB = (a * a + b * b - c * c) / denom;
     const clamped = Math.max(-1, Math.min(1, cosB));
     return Math.acos(clamped) * (180 / Math.PI);
+  }
+
+  /**
+   * Extra Face Mesh geometry (468 landmarks): raw ratios & angles. Indices follow mesh spec
+   * (e.g. glabella 9, trichion 10); separate from LANDMARKS used for overlays where noted.
+   */
+  const FACE_MESH_GEOM = {
+    TRICHION: 10,
+    GLABELLA: 9,
+    NASION: 6,
+    PRONASALE: 1,
+    SUBNASALE: 2,
+    UPPER_LIP_TOP: 0,
+    UPPER_LIP_CENTER: 13,
+    LOWER_LIP_CENTER: 14,
+    LOWER_LIP_BOTTOM: 17,
+    MENTON: 152,
+    POGONION: 199,
+    BIZYGOMATIC_L: 234,
+    BIZYGOMATIC_R: 454,
+    BIGONIAL_L: 132,
+    BIGONIAL_R: 361,
+    ALAR_L: 129,
+    ALAR_R: 358,
+    CHEILION_L: 61,
+    CHEILION_R: 291,
+    OUTER_CANTHUS_L: 33,
+    OUTER_CANTHUS_R: 263,
+    INNER_CANTHUS_L: 133,
+    INNER_CANTHUS_R: 362,
+    LEFT_EYE_TOP: 159,
+    LEFT_EYE_BOTTOM: 145,
+    RIGHT_EYE_TOP: 386,
+    RIGHT_EYE_BOTTOM: 374,
+    BITEMPORAL_L: 68,
+    BITEMPORAL_R: 298,
+    BROW_OUTER_L: 46,
+    BROW_OUTER_R: 276,
+    BROW_INNER_L: 55,
+    BROW_INNER_R: 285,
+  };
+
+  function landmarkNormXYZ(landmarks, index) {
+    const lm = landmarks[index];
+    if (!lm || typeof lm.x !== 'number' || typeof lm.y !== 'number') return null;
+    const z = typeof lm.z === 'number' && Number.isFinite(lm.z) ? lm.z : 0;
+    return { x: lm.x, y: lm.y, z };
+  }
+
+  /** Interior angle at vertex p2 using normalized x,y,z (profile / 3D-consistent). */
+  function angle3PointsNorm(landmarks, i1, i2, i3) {
+    const p1 = landmarkNormXYZ(landmarks, i1);
+    const p2 = landmarkNormXYZ(landmarks, i2);
+    const p3 = landmarkNormXYZ(landmarks, i3);
+    if (!p1 || !p2 || !p3) return NaN;
+    const ax = p1.x - p2.x;
+    const ay = p1.y - p2.y;
+    const az = p1.z - p2.z;
+    const bx = p3.x - p2.x;
+    const by = p3.y - p2.y;
+    const bz = p3.z - p2.z;
+    const dot = ax * bx + ay * by + az * bz;
+    const magA = Math.sqrt(ax * ax + ay * ay + az * az);
+    const magB = Math.sqrt(bx * bx + by * by + bz * bz);
+    if (magA === 0 || magB === 0) return NaN;
+    const cos = Math.max(-1, Math.min(1, dot / (magA * magB)));
+    return (Math.acos(cos) * 180) / Math.PI;
+  }
+
+  /** Raw atan2(dy,dx) in degrees (image x-right, y-down). Prefer canthalTiltEyeAngleDeg / segmentTiltVsIntercanthalHorizonDeg for comparable signed tilts across face sides. */
+  function angleHorizontalDeg(a, b) {
+    if (!a || !b) return NaN;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (dx === 0 && dy === 0) return NaN;
+    return (Math.atan2(dy, dx) * 180) / Math.PI;
+  }
+
+  function safeRatioGeom(num, den) {
+    if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return NaN;
+    return num / den;
+  }
+
+  function fmtRatioGeom(v) {
+    return Number.isFinite(v) ? v.toFixed(2) : '—';
+  }
+
+  function fmtDegGeom(v) {
+    return Number.isFinite(v) ? `${v.toFixed(1)}°` : '—';
+  }
+
+  /** Qualitative bands for mesh metrics (same idea as core dashboard labels). */
+  function labelThirdRatio(r, segmentLabel) {
+    if (!Number.isFinite(r)) return '';
+    const t = 1 / 3;
+    if (Math.abs(r - t) <= 0.055) return 'Balanced';
+    return r > t ? `Longer ${segmentLabel}` : `Shorter ${segmentLabel}`;
+  }
+  function labelBizygOverFaceHeight(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.7) return 'Narrower';
+    if (r > 0.82) return 'Wider';
+    return 'Medium';
+  }
+  function labelBitemporalOverBizyg(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.82) return 'Narrow temples';
+    if (r > 0.98) return 'Broad temples';
+    return 'Average';
+  }
+  function labelMentonMidcheekOverHeight(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.42) return 'Lower profile';
+    if (r > 0.52) return 'Higher cheek mass';
+    return 'Average';
+  }
+  function labelBrowSpanOverBizyg(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.88) return 'Narrow brow';
+    if (r > 1.02) return 'Broad brow';
+    return 'Balanced';
+  }
+  function labelIntercanthalOverBizyg(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.44) return 'Tighter spacing';
+    if (r > 0.56) return 'Wider spacing';
+    return 'Average';
+  }
+  function labelBrowTiltDeg(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (Math.abs(deg) < 4) return 'Neutral';
+    return deg > 0 ? 'Ascending outer' : 'Descending outer';
+  }
+  function labelNoseBridgeOverAlar(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.35) return 'Short bridge';
+    if (r > 0.55) return 'Long bridge';
+    return 'Balanced';
+  }
+  function labelLowerOverUpperLip(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 1.1) return 'Upper-heavy';
+    if (r > 1.45) return 'Lower-heavy';
+    return 'Balanced';
+  }
+  function labelChinOverPhiltrum(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 1.35) return 'Shorter chin segment';
+    if (r > 2.2) return 'Longer chin segment';
+    return 'Balanced';
+  }
+  function labelMouthOverAlar(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r < 0.95) return 'Narrow mouth';
+    if (r > 1.12) return 'Wide mouth';
+    return 'Balanced';
+  }
+  function labelBigonialOverBizyg(r) {
+    if (!Number.isFinite(r)) return '';
+    if (r >= 0.95) return 'Square jaw';
+    if (r <= 0.8) return 'Tapered';
+    return 'Balanced';
+  }
+  function labelJawFrontalAngleDeg(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 145) return 'Tapered front';
+    if (deg > 168) return 'Broad front';
+    return 'Average';
+  }
+  function labelJawSlopeDeg(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (Math.abs(deg) < 10) return 'Neutral';
+    return 'Sloped';
+  }
+  function labelNasofrontal3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 118) return 'Acute';
+    if (deg > 148) return 'Open';
+    return 'Average';
+  }
+  function labelConvexityGlabella3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 160) return 'Convex';
+    if (deg > 172) return 'Flatter';
+    return 'Neutral';
+  }
+  function labelTotalFacialConvexity3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 130) return 'Strong projection';
+    if (deg > 155) return 'Straighter profile';
+    return 'Average';
+  }
+  function labelNasolabial3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 105) return 'Acute';
+    if (deg > 135) return 'Open';
+    return 'Average';
+  }
+  function labelNasomental3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 30) return 'Acute';
+    if (deg > 50) return 'Open';
+    return 'Average';
+  }
+  function labelMentolabial3D(deg) {
+    if (!Number.isFinite(deg)) return '';
+    if (deg < 125) return 'Shallow sulcus';
+    if (deg > 155) return 'Deep sulcus';
+    return 'Average';
+  }
+
+  /**
+   * Appends raw mesh-derived metrics. Frontal: planar ratios/angles only. Profile: adds normalized 3D angles only
+   * (planar mesh metrics stay on the frontal capture so the side view dashboard is not duplicated).
+   */
+  function appendFaceMeshGeometryMetrics(metrics, landmarks, width, height, mode) {
+    const M = FACE_MESH_GEOM;
+    const p = (i) => getLandmark(landmarks, i, width, height);
+
+    const pushR = (key, name, val, sub, label) => {
+      const row = { key, name, value: fmtRatioGeom(val), sub };
+      if (label) row.label = label;
+      metrics.push(row);
+    };
+    const pushD = (key, name, val, sub, label) => {
+      const row = { key, name, value: fmtDegGeom(val), sub };
+      if (label) row.label = label;
+      metrics.push(row);
+    };
+
+    if (mode === 'frontal') {
+      const Tm = p(M.TRICHION);
+      const Gla = p(M.GLABELLA);
+      const Sn = p(M.SUBNASALE);
+      const Me = p(M.MENTON);
+      const thirds = facialThirdsProjectedOntoTM(Tm, Gla, Sn, Me);
+      const faceHeight = thirds.faceHeight;
+      const bizygW = euclidean2D(p(M.BIZYGOMATIC_L), p(M.BIZYGOMATIC_R));
+      const leftCheek = p(M.BIZYGOMATIC_L);
+      const rightCheek = p(M.BIZYGOMATIC_R);
+      const midCheek =
+        leftCheek && rightCheek ? { x: (leftCheek.x + rightCheek.x) / 2, y: (leftCheek.y + rightCheek.y) / 2 } : null;
+
+      const icL = p(M.INNER_CANTHUS_L);
+      const icR = p(M.INNER_CANTHUS_R);
+      const intercanthal = euclidean2D(icL, icR);
+      const alarW = euclidean2D(p(M.ALAR_L), p(M.ALAR_R));
+
+      const rTop = safeRatioGeom(thirds.topLen, faceHeight);
+      const rMid = safeRatioGeom(thirds.midLen, faceHeight);
+      const rLow = safeRatioGeom(thirds.lowerLen, faceHeight);
+      const rFw = safeRatioGeom(bizygW, faceHeight);
+      const rBi = safeRatioGeom(euclidean2D(p(M.BITEMPORAL_L), p(M.BITEMPORAL_R)), bizygW);
+      const rCh = midCheek && p(M.MENTON) ? safeRatioGeom(euclidean2D(p(M.MENTON), midCheek), faceHeight) : NaN;
+      const rBr = safeRatioGeom(euclidean2D(p(M.BROW_OUTER_L), p(M.BROW_OUTER_R)), bizygW);
+      const rIcBz = safeRatioGeom(intercanthal, bizygW);
+      const browL = segmentTiltVsIntercanthalHorizonDeg(p(M.BROW_INNER_L), p(M.BROW_OUTER_L), icL, icR);
+      const browR = segmentTiltVsIntercanthalHorizonDeg(p(M.BROW_INNER_R), p(M.BROW_OUTER_R), icL, icR);
+      const rNb = safeRatioGeom(euclidean2D(p(M.NASION), p(M.PRONASALE)), alarW);
+      const rLip = safeRatioGeom(
+        euclidean2D(p(M.LOWER_LIP_CENTER), p(M.LOWER_LIP_BOTTOM)),
+        euclidean2D(p(M.UPPER_LIP_TOP), p(M.UPPER_LIP_CENTER))
+      );
+      const rChinPh = safeRatioGeom(
+        euclidean2D(p(M.LOWER_LIP_BOTTOM), p(M.MENTON)),
+        euclidean2D(p(M.SUBNASALE), p(M.UPPER_LIP_TOP))
+      );
+      const rMouth = safeRatioGeom(euclidean2D(p(M.CHEILION_L), p(M.CHEILION_R)), alarW);
+      const rJawW = safeRatioGeom(euclidean2D(p(M.BIGONIAL_L), p(M.BIGONIAL_R)), bizygW);
+      const jl = p(M.BIGONIAL_L);
+      const menton = p(M.MENTON);
+      const jr = p(M.BIGONIAL_R);
+      const jawFrontDeg = jl && menton && jr ? angleAtVertex(jl, menton, jr) : NaN;
+      const jawSlopeL = angleHorizontalDeg(p(M.BIGONIAL_L), p(M.MENTON));
+
+      pushR(
+        'fmTopThird',
+        'Top third ratio',
+        rTop,
+        'Upper segment along Trichion–Menton (Glabella projected) / Trichion–Menton',
+        labelThirdRatio(rTop, 'upper third')
+      );
+      pushR(
+        'fmMidThird',
+        'Middle third ratio',
+        rMid,
+        'Middle segment along Trichion–Menton (Glabella→Subnasale projections) / Trichion–Menton',
+        labelThirdRatio(rMid, 'middle third')
+      );
+      pushR(
+        'fmLowerThird',
+        'Lower third ratio',
+        rLow,
+        'Lower segment along Trichion–Menton (Subnasale projected) / Trichion–Menton',
+        labelThirdRatio(rLow, 'lower third')
+      );
+      pushR('fmTotalFWHR', 'Bizygomatic / facial height', rFw, 'Left zygoma–Right zygoma / Trichion–Menton', labelBizygOverFaceHeight(rFw));
+      pushR('fmBitemporalOverBizyg', 'Bitemporal / bizygomatic width', rBi, 'Left temporal–Right temporal / Left zygoma–Right zygoma', labelBitemporalOverBizyg(rBi));
+      pushR(
+        'fmCheekboneHeight',
+        'Menton to mid-cheek / facial height',
+        rCh,
+        'Menton–Mid-cheek / Trichion–Menton',
+        labelMentonMidcheekOverHeight(rCh)
+      );
+
+      pushR('fmBrowSpanOverBizyg', 'Brow span / bizygomatic width', rBr, 'Left brow outer–Right brow outer / Left zygoma–Right zygoma', labelBrowSpanOverBizyg(rBr));
+      pushR('fmEyeSepOverBizyg', 'Intercanthal / bizygomatic width', rIcBz, 'Medial canthus L–Medial canthus R / Left zygoma–Right zygoma', labelIntercanthalOverBizyg(rIcBz));
+
+      pushD(
+        'fmBrowTiltL',
+        'Eyebrow tilt left (°)',
+        browL,
+        'Medial brow–Lateral brow vs intercanthal horizon, left',
+        labelBrowTiltDeg(browL)
+      );
+      pushD(
+        'fmBrowTiltR',
+        'Eyebrow tilt right (°)',
+        browR,
+        'Medial brow–Lateral brow vs intercanthal horizon, right',
+        labelBrowTiltDeg(browR)
+      );
+
+      pushR('fmNoseBridgeOverAlar', 'Nose bridge / alar width', rNb, 'Nasion–Pronasale / Left ala–Right ala', labelNoseBridgeOverAlar(rNb));
+
+      pushR(
+        'fmLowerOverUpperLip',
+        'Lower lip / upper lip height',
+        rLip,
+        'Lower lip center–Lower lip bottom / Upper lip top–Upper lip center',
+        labelLowerOverUpperLip(rLip)
+      );
+      pushR(
+        'fmChinOverPhiltrum',
+        'Chin height / philtrum length',
+        rChinPh,
+        'Lower lip bottom–Menton / Subnasale–Upper lip top',
+        labelChinOverPhiltrum(rChinPh)
+      );
+      pushR('fmMouthOverNoseWidth', 'Mouth width / alar width', rMouth, 'Left cheilion–Right cheilion / Left ala–Right ala', labelMouthOverAlar(rMouth));
+
+      pushR('fmBigonialOverBizyg', 'Bigonial / bizygomatic width', rJawW, 'Left gonion–Right gonion / Left zygoma–Right zygoma', labelBigonialOverBizyg(rJawW));
+
+      pushD('fmJawFrontalAngle', 'Jaw frontal angle', jawFrontDeg, 'Left gonion–Menton–Right gonion (angle at Menton)', labelJawFrontalAngleDeg(jawFrontDeg));
+      pushD('fmJawSlopeL', 'Jaw slope left (°)', jawSlopeL, 'Left gonion–Menton', labelJawSlopeDeg(jawSlopeL));
+    }
+
+    if (mode === 'profile') {
+      const aNf = angle3PointsNorm(landmarks, M.GLABELLA, M.NASION, M.PRONASALE);
+      const aCg = angle3PointsNorm(landmarks, M.GLABELLA, M.SUBNASALE, M.POGONION);
+      const aTc = angle3PointsNorm(landmarks, M.NASION, M.PRONASALE, M.POGONION);
+      const aNl = angle3PointsNorm(landmarks, M.PRONASALE, M.SUBNASALE, M.UPPER_LIP_TOP);
+      const aNm = angle3PointsNorm(landmarks, M.PRONASALE, M.NASION, M.POGONION);
+      const aMl = angle3PointsNorm(landmarks, M.LOWER_LIP_CENTER, M.LOWER_LIP_BOTTOM, M.POGONION);
+      pushD('fmNasofrontal', 'Nasofrontal angle', aNf, 'Glabella–Nasion–Pronasale', labelNasofrontal3D(aNf));
+      pushD('fmConvexityGlabella', 'Facial convexity (mesh)', aCg, 'Glabella–Subnasale–Pogonion', labelConvexityGlabella3D(aCg));
+      pushD('fmTotalFacialConvexity', 'Total facial convexity', aTc, 'Nasion–Pronasale–Pogonion', labelTotalFacialConvexity3D(aTc));
+      pushD('fmNasolabial', 'Nasolabial angle', aNl, 'Pronasale–Subnasale–Upper lip top', labelNasolabial3D(aNl));
+      pushD('fmNasomental', 'Nasomental angle', aNm, 'Pronasale–Nasion–Pogonion', labelNasomental3D(aNm));
+      pushD('fmMentolabial', 'Mentolabial angle', aMl, 'Lower lip center–Lower lip bottom–Pogonion', labelMentolabial3D(aMl));
+    }
   }
 
   // ---------- DOM & state ----------
@@ -235,6 +639,8 @@
   let imageSourceProfileURL = null;
   let analyzingImage = false;
   let analyzingForProfileMode = false; // when true, analysis result goes to profile slot (image page only)
+  let pendingImageAnalysisWidth = 0;
+  let pendingImageAnalysisHeight = 0;
 
   // Motion stabilization: nose tip (node 4) pixel positions, last N frames
   const NOSE_BUFFER_SIZE = 20;
@@ -247,26 +653,20 @@
   const noseTipBuffer = [];
   let stableFrameCount = 0;
 
-  // ---------- Universal color mapping (legend system): canvas + dashboard ----------
-  const METRIC_COLORS = {
-    canthalTilt: '#FF1493',
-    palpebralFissure: '#00FFFF',
-    intercanthalRatio: '#FFD700',
-    fwhr: '#39FF14',
-    midfaceRatio: '#B026FF',
-    bigonialToBizygomatic: '#FF8C00',
-    philtrumToChin: '#FF7F50',
-    gonialAngleRamus: '#FF0000',
-    alarBase: '#8888a0',
-    facialConvexity: '#8888a0',
-  };
+  // ---------- Single accent for every metric (canvas lines + dashboard card borders) ----------
+  const METRIC_ACCENT = '#06B6D4';
 
-  const DOT_RADIUS = 1.5;
+  const DOT_RADIUS = 1.1;
   const LINE_WIDTH_BASE = 1;
-  const DEFAULT_OPACITY = 0.3;
+  /** No card hovered: lines/dots barely visible (was 0.3; many stacked metrics read too loud). */
+  const DEFAULT_OPACITY = 0.06;
+  /** Hovered card: full contrast. */
   const HOVERED_OPACITY = 1.0;
-  const HOVERED_LINE_WIDTH = 2;
-  const NON_HOVERED_OPACITY = 0.1;
+  const HOVERED_LINE_WIDTH = 1.5;
+  /** Hovered segment along Trichion–Menton (thirds); thicker than generic hovered metrics. */
+  const FACIAL_THIRDS_HOVER_LINE_WIDTH = 4;
+  /** Another card hovered: hide non-selected geometry almost entirely. */
+  const NON_HOVERED_OPACITY = 0.03;
 
   let hoveredMetricKey = null;
 
@@ -314,8 +714,139 @@
   }
 
   const OVERLAY_REF_SIZE = 480;
+  /** Cap so high-res frames do not inflate strokes/dots without bound. */
+  const OVERLAY_SCALE_MAX = 2.25;
   function overlayScale(width, height) {
-    return Math.max(1, Math.min(width, height) / OVERLAY_REF_SIZE);
+    const s = Math.min(width, height) / OVERLAY_REF_SIZE;
+    return Math.max(1, Math.min(s, OVERLAY_SCALE_MAX));
+  }
+
+  /** Draw segments + nodes for one metric card (hover dims non-selected). */
+  function drawMetricLineSet(ctx, metricKey, linePairs, width, height) {
+    const C = METRIC_ACCENT;
+    const scale = overlayScale(width, height);
+    const lwPx = (w) => Math.max(1, Math.round(w * scale));
+    const dr = () => Math.max(1.1, DOT_RADIUS * scale);
+    const { opacity, lineWidth } = getOpacityAndLineWidth(metricKey);
+    const pairs = linePairs.filter(([a, b]) => a && b);
+    for (let i = 0; i < pairs.length; i++) {
+      const a = pairs[i][0];
+      const b = pairs[i][1];
+      drawLine(ctx, a, b, C, lwPx(lineWidth), opacity);
+    }
+    for (let i = 0; i < pairs.length; i++) {
+      const a = pairs[i][0];
+      const b = pairs[i][1];
+      if (a) drawDot(ctx, a, C, opacity, dr());
+      if (b) drawDot(ctx, b, C, opacity, dr());
+    }
+  }
+
+  /**
+   * Vertical thirds along Trichion→Menton: T→PG and T→Me are collinear, so separate drawMetricLineSet calls
+   * stack into one line. Draw once with perpendicular ticks at glabella/subnasale projections, connectors from
+   * landmarks, larger dots, and a thick stroke on the hovered third’s segment.
+   */
+  function drawFacialThirdsUnifiedOverlay(ctx, T, Me, PG, PSn, Gla, Sn, width, height) {
+    const C = METRIC_ACCENT;
+    const scale = overlayScale(width, height);
+    const lwPx = (w) => Math.max(1, Math.round(w * scale));
+    const dotR = () => Math.max(1.75, 2.4 * scale);
+
+    const structOp = Math.max(
+      getOpacityAndLineWidth('fmTopThird').opacity,
+      getOpacityAndLineWidth('fmMidThird').opacity,
+      getOpacityAndLineWidth('fmLowerThird').opacity
+    );
+
+    if (!T || !Me || !PG || !PSn || !Gla || !Sn) {
+      drawMetricLineSet(ctx, 'fmTopThird', [[T, Gla], [T, Me]], width, height);
+      drawMetricLineSet(ctx, 'fmMidThird', [[Gla, Sn], [T, Me]], width, height);
+      drawMetricLineSet(ctx, 'fmLowerThird', [[Sn, Me], [T, Me]], width, height);
+      return;
+    }
+
+    const dx = Me.x - T.x;
+    const dy = Me.y - T.y;
+    const len = Math.hypot(dx, dy);
+    const nx = len > 0 ? -dy / len : -1;
+    const ny = len > 0 ? dx / len : 0;
+    const tickHalf = Math.max(28, Math.min(width, height) * 0.068);
+
+    drawLine(ctx, T, Me, C, lwPx(LINE_WIDTH_BASE), structOp);
+
+    const tickEnds = (c) => [
+      { x: c.x - nx * tickHalf, y: c.y - ny * tickHalf },
+      { x: c.x + nx * tickHalf, y: c.y + ny * tickHalf },
+    ];
+    const [pgA, pgB] = tickEnds(PG);
+    const [snA, snB] = tickEnds(PSn);
+    drawLine(ctx, pgA, pgB, C, lwPx(LINE_WIDTH_BASE), structOp);
+    drawLine(ctx, snA, snB, C, lwPx(LINE_WIDTH_BASE), structOp);
+
+    drawLine(ctx, Gla, PG, C, lwPx(LINE_WIDTH_BASE), structOp);
+    drawLine(ctx, Sn, PSn, C, lwPx(LINE_WIDTH_BASE), structOp);
+
+    [T, PG, PSn, Me, Gla, Sn].forEach((pt) => drawDot(ctx, pt, C, structOp, dotR()));
+
+    const segments = [
+      { key: 'fmTopThird', a: T, b: PG },
+      { key: 'fmMidThird', a: PG, b: PSn },
+      { key: 'fmLowerThird', a: PSn, b: Me },
+    ];
+    for (let i = 0; i < segments.length; i++) {
+      const { key, a, b } = segments[i];
+      if (hoveredMetricKey === key) {
+        drawLine(ctx, a, b, C, lwPx(FACIAL_THIRDS_HOVER_LINE_WIDTH), HOVERED_OPACITY);
+      }
+    }
+  }
+
+  /** Extra mesh metrics (fm*): same line+dot treatment as core metrics. */
+  function drawFrontalFaceMeshMetricOverlays(ctx, landmarks, width, height) {
+    const M = FACE_MESH_GEOM;
+    const g = (i) => getLandmark(landmarks, i, width, height);
+    const lc = g(M.BIZYGOMATIC_L);
+    const rc = g(M.BIZYGOMATIC_R);
+    const midCheek = lc && rc ? { x: (lc.x + rc.x) / 2, y: (lc.y + rc.y) / 2 } : null;
+
+    const T = g(M.TRICHION), Gla = g(M.GLABELLA), Sn = g(M.SUBNASALE), Me = g(M.MENTON);
+    const faceH = T && Me ? euclidean2D(T, Me) : 0;
+    const tG = T && Me && Gla && faceH > 0 ? projDistAlongSegment(T, Me, Gla) : NaN;
+    const tSn = T && Me && Sn && faceH > 0 ? projDistAlongSegment(T, Me, Sn) : NaN;
+    const PG =
+      Number.isFinite(tG) && faceH > 0 ? pointAtDistAlongSegment(T, Me, Math.max(0, Math.min(tG, faceH))) : null;
+    const PSn =
+      Number.isFinite(tSn) && faceH > 0 ? pointAtDistAlongSegment(T, Me, Math.max(0, Math.min(tSn, faceH))) : null;
+
+    drawFacialThirdsUnifiedOverlay(ctx, T, Me, PG, PSn, Gla, Sn, width, height);
+    drawMetricLineSet(ctx, 'fmTotalFWHR', [[g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)], [g(M.TRICHION), g(M.MENTON)]], width, height);
+    drawMetricLineSet(ctx, 'fmBitemporalOverBizyg', [[g(M.BITEMPORAL_L), g(M.BITEMPORAL_R)], [g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)]], width, height);
+    if (midCheek) {
+      drawMetricLineSet(ctx, 'fmCheekboneHeight', [[g(M.MENTON), midCheek], [g(M.TRICHION), g(M.MENTON)]], width, height);
+    }
+    drawMetricLineSet(ctx, 'fmBrowSpanOverBizyg', [[g(M.BROW_OUTER_L), g(M.BROW_OUTER_R)], [g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmEyeSepOverBizyg', [[g(M.INNER_CANTHUS_L), g(M.INNER_CANTHUS_R)], [g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmBrowTiltL', [[g(M.BROW_INNER_L), g(M.BROW_OUTER_L)]], width, height);
+    drawMetricLineSet(ctx, 'fmBrowTiltR', [[g(M.BROW_INNER_R), g(M.BROW_OUTER_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmNoseBridgeOverAlar', [[g(M.NASION), g(M.PRONASALE)], [g(M.ALAR_L), g(M.ALAR_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmLowerOverUpperLip', [[g(M.LOWER_LIP_CENTER), g(M.LOWER_LIP_BOTTOM)], [g(M.UPPER_LIP_TOP), g(M.UPPER_LIP_CENTER)]], width, height);
+    drawMetricLineSet(ctx, 'fmChinOverPhiltrum', [[g(M.LOWER_LIP_BOTTOM), g(M.MENTON)], [g(M.SUBNASALE), g(M.UPPER_LIP_TOP)]], width, height);
+    drawMetricLineSet(ctx, 'fmMouthOverNoseWidth', [[g(M.CHEILION_L), g(M.CHEILION_R)], [g(M.ALAR_L), g(M.ALAR_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmBigonialOverBizyg', [[g(M.BIGONIAL_L), g(M.BIGONIAL_R)], [g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmJawFrontalAngle', [[g(M.BIGONIAL_L), g(M.MENTON)], [g(M.MENTON), g(M.BIGONIAL_R)], [g(M.BIGONIAL_L), g(M.BIGONIAL_R)]], width, height);
+    drawMetricLineSet(ctx, 'fmJawSlopeL', [[g(M.BIGONIAL_L), g(M.MENTON)]], width, height);
+  }
+
+  function drawProfileFaceMeshMetricOverlays(ctx, landmarks, width, height) {
+    const M = FACE_MESH_GEOM;
+    const g = (i) => getLandmark(landmarks, i, width, height);
+    drawMetricLineSet(ctx, 'fmNasofrontal', [[g(M.GLABELLA), g(M.NASION)], [g(M.NASION), g(M.PRONASALE)]], width, height);
+    drawMetricLineSet(ctx, 'fmConvexityGlabella', [[g(M.GLABELLA), g(M.SUBNASALE)], [g(M.SUBNASALE), g(M.POGONION)]], width, height);
+    drawMetricLineSet(ctx, 'fmTotalFacialConvexity', [[g(M.NASION), g(M.PRONASALE)], [g(M.PRONASALE), g(M.POGONION)]], width, height);
+    drawMetricLineSet(ctx, 'fmNasolabial', [[g(M.PRONASALE), g(M.SUBNASALE)], [g(M.SUBNASALE), g(M.UPPER_LIP_TOP)]], width, height);
+    drawMetricLineSet(ctx, 'fmNasomental', [[g(M.PRONASALE), g(M.NASION)], [g(M.NASION), g(M.POGONION)]], width, height);
+    drawMetricLineSet(ctx, 'fmMentolabial', [[g(M.LOWER_LIP_CENTER), g(M.LOWER_LIP_BOTTOM)], [g(M.LOWER_LIP_BOTTOM), g(M.POGONION)]], width, height);
   }
 
   function drawFrontalOverlay(landmarks, width, height) {
@@ -323,7 +854,7 @@
     const g = (i) => getLandmark(landmarks, i, width, height);
     const scale = overlayScale(width, height);
     const lw = (w) => Math.max(1, Math.round(w * scale));
-    const dr = () => Math.max(1.5, DOT_RADIUS * scale);
+    const dr = () => Math.max(1.1, DOT_RADIUS * scale);
 
     const leftInner = g(LANDMARKS.LEFT_EYE_INNER), leftOuter = g(LANDMARKS.LEFT_EYE_OUTER);
     const rightInner = g(LANDMARKS.RIGHT_EYE_INNER), rightOuter = g(LANDMARKS.RIGHT_EYE_OUTER);
@@ -332,43 +863,43 @@
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
     // Canthal tilt: draw only the segment from inner to outer canthus (no extension past corners).
-    drawLine(ctx, leftInner, leftOuter, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity);
-    drawLine(ctx, rightInner, rightOuter, METRIC_COLORS.canthalTilt, lw(lineWidth), lineOpacity);
-    drawDot(ctx, leftInner, METRIC_COLORS.canthalTilt, opacity, dr());
-    drawDot(ctx, leftOuter, METRIC_COLORS.canthalTilt, opacity, dr());
-    drawDot(ctx, rightInner, METRIC_COLORS.canthalTilt, opacity, dr());
-    drawDot(ctx, rightOuter, METRIC_COLORS.canthalTilt, opacity, dr());
+    drawLine(ctx, leftInner, leftOuter, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, rightInner, rightOuter, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, leftInner, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, leftOuter, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightInner, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightOuter, METRIC_ACCENT, opacity, dr());
 
     const leftTop = g(LANDMARKS.LEFT_EYE_TOP), leftBottom = g(LANDMARKS.LEFT_EYE_BOTTOM);
     const rightTop = g(LANDMARKS.RIGHT_EYE_TOP), rightBottom = g(LANDMARKS.RIGHT_EYE_BOTTOM);
     key = 'palpebralFissure';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, leftTop, leftBottom, METRIC_COLORS.palpebralFissure, lw(lineWidth), lineOpacity);
-    drawLine(ctx, rightTop, rightBottom, METRIC_COLORS.palpebralFissure, lw(lineWidth), lineOpacity);
-    drawDot(ctx, leftTop, METRIC_COLORS.palpebralFissure, opacity, dr());
-    drawDot(ctx, leftBottom, METRIC_COLORS.palpebralFissure, opacity, dr());
-    drawDot(ctx, rightTop, METRIC_COLORS.palpebralFissure, opacity, dr());
-    drawDot(ctx, rightBottom, METRIC_COLORS.palpebralFissure, opacity, dr());
+    drawLine(ctx, leftTop, leftBottom, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, rightTop, rightBottom, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, leftTop, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, leftBottom, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightTop, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightBottom, METRIC_ACCENT, opacity, dr());
 
     key = 'intercanthalRatio';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, leftInner, rightInner, METRIC_COLORS.intercanthalRatio, lw(lineWidth), lineOpacity);
-    drawDot(ctx, leftInner, METRIC_COLORS.intercanthalRatio, opacity, dr());
-    drawDot(ctx, rightInner, METRIC_COLORS.intercanthalRatio, opacity, dr());
+    drawLine(ctx, leftInner, rightInner, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, leftInner, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightInner, METRIC_ACCENT, opacity, dr());
 
     const leftCheek = g(LANDMARKS.LEFT_CHEEK), rightCheek = g(LANDMARKS.RIGHT_CHEEK);
     const glabella = g(LANDMARKS.GLABELLA), philtrumTop = g(LANDMARKS.PHILTRUM_TOP);
     key = 'fwhr';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, leftCheek, rightCheek, METRIC_COLORS.fwhr, lw(lineWidth), lineOpacity);
-    drawLine(ctx, glabella, philtrumTop, METRIC_COLORS.fwhr, lw(lineWidth), lineOpacity);
-    drawDot(ctx, leftCheek, METRIC_COLORS.fwhr, opacity, dr());
-    drawDot(ctx, rightCheek, METRIC_COLORS.fwhr, opacity, dr());
-    drawDot(ctx, glabella, METRIC_COLORS.fwhr, opacity, dr());
-    drawDot(ctx, philtrumTop, METRIC_COLORS.fwhr, opacity, dr());
+    drawLine(ctx, leftCheek, rightCheek, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, glabella, philtrumTop, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, leftCheek, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightCheek, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, glabella, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, philtrumTop, METRIC_ACCENT, opacity, dr());
 
     const leftIris = landmarks[LANDMARKS.LEFT_IRIS_CENTER];
     const rightIris = landmarks[LANDMARKS.RIGHT_IRIS_CENTER];
@@ -377,13 +908,13 @@
     key = 'midfaceRatio';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawDot(ctx, leftIrisP, METRIC_COLORS.midfaceRatio, opacity, dr());
-    drawDot(ctx, rightIrisP, METRIC_COLORS.midfaceRatio, opacity, dr());
+    drawDot(ctx, leftIrisP, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightIrisP, METRIC_ACCENT, opacity, dr());
     const midY = (leftIrisP.y + rightIrisP.y) / 2;
     const midP = { x: (leftIrisP.x + rightIrisP.x) / 2, y: midY };
-    drawLine(ctx, leftIrisP, rightIrisP, METRIC_COLORS.midfaceRatio, lw(lineWidth), lineOpacity);
-    drawLine(ctx, midP, philtrumTop, METRIC_COLORS.midfaceRatio, lw(lineWidth), lineOpacity);
-    drawDot(ctx, philtrumTop, METRIC_COLORS.midfaceRatio, opacity, dr());
+    drawLine(ctx, leftIrisP, rightIrisP, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, midP, philtrumTop, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, philtrumTop, METRIC_ACCENT, opacity, dr());
 
     const jawP1 = g(LANDMARKS.LEFT_GONION), jawP2 = g(LANDMARKS.RIGHT_GONION);
     const leftGonionDraw = jawP1 && jawP2 && jawP1.x <= jawP2.x ? jawP1 : jawP2;
@@ -391,30 +922,32 @@
     key = 'bigonialToBizygomatic';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, leftGonionDraw, rightGonionDraw, METRIC_COLORS.bigonialToBizygomatic, lw(lineWidth), lineOpacity);
-    drawDot(ctx, leftGonionDraw, METRIC_COLORS.bigonialToBizygomatic, opacity, dr());
-    drawDot(ctx, rightGonionDraw, METRIC_COLORS.bigonialToBizygomatic, opacity, dr());
+    drawLine(ctx, leftGonionDraw, rightGonionDraw, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, leftGonionDraw, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, rightGonionDraw, METRIC_ACCENT, opacity, dr());
 
     const subnasale = g(LANDMARKS.SUBNASALE), upperLipTop = g(LANDMARKS.UPPER_LIP_TOP);
     const lowerLipBottom = g(LANDMARKS.LOWER_LIP_BOTTOM), menton = g(LANDMARKS.MENTON);
     key = 'philtrumToChin';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, subnasale, upperLipTop, METRIC_COLORS.philtrumToChin, lw(lineWidth), lineOpacity);
-    drawLine(ctx, lowerLipBottom, menton, METRIC_COLORS.philtrumToChin, lw(lineWidth), lineOpacity);
-    drawDot(ctx, subnasale, METRIC_COLORS.philtrumToChin, opacity, dr());
-    drawDot(ctx, upperLipTop, METRIC_COLORS.philtrumToChin, opacity, dr());
-    drawDot(ctx, lowerLipBottom, METRIC_COLORS.philtrumToChin, opacity, dr());
-    drawDot(ctx, menton, METRIC_COLORS.philtrumToChin, opacity, dr());
+    drawLine(ctx, subnasale, upperLipTop, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, lowerLipBottom, menton, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, subnasale, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, upperLipTop, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, lowerLipBottom, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, menton, METRIC_ACCENT, opacity, dr());
 
     const noseLeft = g(LANDMARKS.NOSE_LEFT_ALAR), noseRight = g(LANDMARKS.NOSE_RIGHT_ALAR);
     key = 'alarBase';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
-    drawLine(ctx, noseLeft, noseRight, METRIC_COLORS.alarBase, lw(lineWidth), lineOpacity);
-    drawLine(ctx, leftInner, rightInner, METRIC_COLORS.alarBase, lw(lineWidth), lineOpacity);
-    drawDot(ctx, noseLeft, METRIC_COLORS.alarBase, opacity, dr());
-    drawDot(ctx, noseRight, METRIC_COLORS.alarBase, opacity, dr());
+    drawLine(ctx, noseLeft, noseRight, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawLine(ctx, leftInner, rightInner, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    drawDot(ctx, noseLeft, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, noseRight, METRIC_ACCENT, opacity, dr());
+
+    drawFrontalFaceMeshMetricOverlays(ctx, landmarks, width, height);
   }
 
   function drawProfileOverlay(landmarks, width, height, profileSide) {
@@ -422,7 +955,7 @@
     const g = (i) => getLandmark(landmarks, i, width, height);
     const scale = overlayScale(width, height);
     const lw = (w) => Math.max(1, Math.round(w * scale));
-    const dr = () => Math.max(1.5, DOT_RADIUS * scale);
+    const dr = () => Math.max(1.1, DOT_RADIUS * scale);
     const side = profileSide ?? getProfileSide(landmarks, width, height);
 
     // Gonial angle: only Tragion, Dynamic Gonion, Menton + two connecting lines
@@ -432,11 +965,11 @@
       const key = 'gonialAngleRamus';
       const { opacity, lineWidth } = getOpacityAndLineWidth(key);
       const lineOpacity = opacity;
-      drawLine(ctx, tragion, gonion, METRIC_COLORS.gonialAngleRamus, lw(lineWidth), lineOpacity);
-      drawLine(ctx, gonion, menton, METRIC_COLORS.gonialAngleRamus, lw(lineWidth), lineOpacity);
-      drawDot(ctx, tragion, METRIC_COLORS.gonialAngleRamus, opacity, dr());
-      drawDot(ctx, gonion, METRIC_COLORS.gonialAngleRamus, opacity, dr());
-      drawDot(ctx, menton, METRIC_COLORS.gonialAngleRamus, opacity, dr());
+      drawLine(ctx, tragion, gonion, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+      drawLine(ctx, gonion, menton, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+      drawDot(ctx, tragion, METRIC_ACCENT, opacity, dr());
+      drawDot(ctx, gonion, METRIC_ACCENT, opacity, dr());
+      drawDot(ctx, menton, METRIC_ACCENT, opacity, dr());
     }
 
     const glabella = g(LANDMARKS.GLABELLA);
@@ -445,10 +978,13 @@
     const key2 = 'facialConvexity';
     const { opacity: op2, lineWidth: lw2 } = getOpacityAndLineWidth(key2);
     const lineOpacity2 = op2;
-    drawLine(ctx, glabella, subnasale, METRIC_COLORS.facialConvexity, lw(lw2), lineOpacity2);
-    drawLine(ctx, subnasale, menton, METRIC_COLORS.facialConvexity, lw(lw2), lineOpacity2);
-    drawDot(ctx, glabella, METRIC_COLORS.facialConvexity, op2, dr());
-    drawDot(ctx, subnasale, METRIC_COLORS.facialConvexity, op2, dr());
+    drawLine(ctx, glabella, subnasale, METRIC_ACCENT, lw(lw2), lineOpacity2);
+    drawLine(ctx, subnasale, menton, METRIC_ACCENT, lw(lw2), lineOpacity2);
+    drawDot(ctx, glabella, METRIC_ACCENT, op2, dr());
+    drawDot(ctx, subnasale, METRIC_ACCENT, op2, dr());
+    drawDot(ctx, menton, METRIC_ACCENT, op2, dr());
+
+    drawProfileFaceMeshMetricOverlays(ctx, landmarks, width, height);
   }
 
   // ---------- Profile turn detection: nose-to-eye horizontal distance ratio ----------
@@ -753,11 +1289,15 @@
       }
       clearOverlay();
       analyzingImage = true;
+      pendingImageAnalysisWidth = w;
+      pendingImageAnalysisHeight = h;
       if (hint) hint.textContent = 'Analyzing image…';
       if (hintSub) { hintSub.textContent = ''; hintSub.classList.add('empty'); }
       faceMesh.send({ image: img }).catch((e) => {
         console.warn('FaceMesh image error', e);
         analyzingImage = false;
+        pendingImageAnalysisWidth = 0;
+        pendingImageAnalysisHeight = 0;
         if (hint) hint.textContent = 'Analysis failed. Try another image.' + (isImagePage ? '' : ' Or use the camera.');
         if (isImagePage) updateImagePageDropZoneVisibility();
       });
@@ -818,8 +1358,8 @@
     metrics.push({
       key: 'canthalTilt',
       name: 'Canthal Tilt',
-      value: canthalAvg.toFixed(1) + '°',
-      sub: `L: ${leftCanthalDeg.toFixed(1)}° · R: ${rightCanthalDeg.toFixed(1)}°`,
+      value: Math.round(canthalAvg) + '°',
+      sub: `L ${Math.round(leftCanthalDeg)}° · R ${Math.round(rightCanthalDeg)}° · Lateral–medial canthus vs intercanthal horizon`,
       label: canthalLabel,
     });
 
@@ -836,7 +1376,7 @@
       key: 'palpebralFissure',
       name: 'Palpebral Fissure Ratio',
       value: pfRatio.toFixed(2),
-      sub: `L: ${leftPF.toFixed(2)} · R: ${rightPF.toFixed(2)}`,
+      sub: `L ${leftPF.toFixed(2)} · R ${rightPF.toFixed(2)} · Palpebral width (lateral–medial) / palpebral height`,
       label: pfRatio >= 3.5 ? 'Wide' : pfRatio <= 2.5 ? 'Narrow' : 'Medium',
     });
 
@@ -847,7 +1387,7 @@
       key: 'intercanthalRatio',
       name: 'Intercanthal Ratio',
       value: intercanthalRatio.toFixed(2),
-      sub: 'Inner corner dist / eye width',
+      sub: 'Medial canthus–Medial canthus / Mean palpebral width (lateral–medial)',
       label: intercanthalRatio >= 1.1 ? 'Wide-set' : intercanthalRatio <= 0.9 ? 'Close-set' : 'Average',
     });
 
@@ -860,7 +1400,7 @@
       key: 'fwhr',
       name: 'Facial Width–Height Ratio (fWHR)',
       value: fWHR.toFixed(2),
-      sub: 'Bizygomatic / upper face height',
+      sub: 'Left zygoma–Right zygoma / Glabella–Upper lip superior (midline)',
       label: fWHR >= 1.35 ? 'Wider' : fWHR <= 1.15 ? 'Narrower' : 'Medium',
     });
 
@@ -886,7 +1426,7 @@
       key: 'midfaceRatio',
       name: 'Midface Ratio',
       value: midfaceRatio.toFixed(2),
-      sub: 'Interpupillary / (pupil line to upper lip)',
+      sub: 'Interpupillary distance / Mid-pupil line to upper lip superior',
       label: midfaceRatio >= 1.0 ? 'Longer midface' : midfaceRatio <= 0.75 ? 'Shorter midface' : 'Average',
     });
 
@@ -900,7 +1440,7 @@
       key: 'bigonialToBizygomatic',
       name: 'Bigonial to Bizygomatic Ratio',
       value: bigonialToBizy.toFixed(2),
-      sub: 'Jaw width / cheekbone width',
+      sub: 'Left gonion–Right gonion / Left zygoma–Right zygoma',
       label: bigonialToBizy >= 0.95 ? 'Square jaw' : bigonialToBizy <= 0.8 ? 'Tapered' : 'Balanced',
     });
 
@@ -917,7 +1457,7 @@
       key: 'philtrumToChin',
       name: 'Philtrum-to-Chin Ratio',
       value: philtrumChinRatio.toFixed(2),
-      sub: 'Philtrum length / chin length',
+      sub: 'Subnasale–Upper lip top / Lower lip bottom–Menton',
       label: philtrumLabel,
     });
 
@@ -928,9 +1468,11 @@
       key: 'alarBase',
       name: 'Alar-Base to Intercanthal Ratio',
       value: alarIntercanthalRatio.toFixed(2),
-      sub: 'Nose width / inner canthal distance',
+      sub: 'Left ala–Right ala / Medial canthus–Medial canthus',
       label: alarIntercanthalRatio >= 1.05 ? 'Wider nose' : alarIntercanthalRatio <= 0.85 ? 'Narrower nose' : 'Proportional',
     });
+
+    appendFaceMeshGeometryMetrics(metrics, landmarks, width, height, 'frontal');
 
     return metrics;
   }
@@ -963,9 +1505,11 @@
       key: 'facialConvexity',
       name: 'Facial Convexity',
       value: convexityAngle.toFixed(1) + '°',
-      sub: 'Glabella–Subnasale–Pogonion',
+      sub: 'Glabella–Subnasale–Menton (angle at Subnasale)',
       label: convexityAngle >= 175 ? 'Flat' : convexityAngle <= 165 ? 'Convex' : 'Neutral',
     });
+
+    appendFaceMeshGeometryMetrics(metrics, landmarks, width, height, 'profile');
 
     return metrics;
   }
@@ -983,7 +1527,7 @@
       .map(
         (m) => {
           const key = m.key || 'alarBase';
-          const borderColor = METRIC_COLORS[key] || METRIC_COLORS.alarBase;
+          const borderColor = METRIC_ACCENT;
           return `
         <div class="metric-card" data-metric="${key}" style="--metric-color: ${borderColor}">
           <h3>${m.name}</h3>
@@ -1018,6 +1562,8 @@
   function onResults(results, width, height) {
     if (analyzingImage) {
       analyzingImage = false;
+      pendingImageAnalysisWidth = 0;
+      pendingImageAnalysisHeight = 0;
       clearOverlay();
       if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
         hint.textContent = isImagePage && analyzingForProfileMode
@@ -1185,8 +1731,8 @@
       minTrackingConfidence: 0.3,
     });
     faceMesh.onResults((results) => {
-      const w = overlay.width || videoWidth();
-      const h = overlay.height || videoHeight();
+      const w = pendingImageAnalysisWidth || overlay.width || videoWidth();
+      const h = pendingImageAnalysisHeight || overlay.height || videoHeight();
       onResults(results, w, h);
     });
   }
