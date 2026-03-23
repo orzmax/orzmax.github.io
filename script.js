@@ -27,7 +27,6 @@
     // Philtrum: Subnasale 2 → Upper lip top 0. Chin: Lower lip bottom 17 → Menton 152.
     UPPER_LIP_TOP: 0,
     LOWER_LIP_BOTTOM: 17,
-    PHILTRUM_TOP: 164, // kept for FWHR / midface overlay
     NOSE_LEFT_ALAR: 129,
     NOSE_RIGHT_ALAR: 358,
 
@@ -35,8 +34,8 @@
     LOWER_LIP: 14,
     MENTON: 152,
 
-    // Brow
-    GLABELLA: 10,
+    // Glabella: mesh index 9 (10 is forehead/trichion on the 468 model—do not swap).
+    GLABELLA: 9,
 
     // Bizygomatic (cheekbones): 234, 454
     LEFT_CHEEK: 234,
@@ -322,10 +321,11 @@
     if (Math.abs(r - t) <= 0.055) return 'Balanced';
     return r > t ? `Longer ${segmentLabel}` : `Shorter ${segmentLabel}`;
   }
-  function labelBizygOverFaceHeight(r) {
+  /** Bizygomatic width / upper-face height (glabella → upper lip top); same bands as core fWHR card. */
+  function labelFwhrRatio(r) {
     if (!Number.isFinite(r)) return '';
-    if (r < 0.7) return 'Narrower';
-    if (r > 0.82) return 'Wider';
+    if (r >= 1.35) return 'Wider';
+    if (r <= 1.15) return 'Narrower';
     return 'Medium';
   }
   function labelBitemporalOverBizyg(r) {
@@ -475,7 +475,6 @@
       const rTop = safeRatioGeom(thirds.topLen, faceHeight);
       const rMid = safeRatioGeom(thirds.midLen, faceHeight);
       const rLow = safeRatioGeom(thirds.lowerLen, faceHeight);
-      const rFw = safeRatioGeom(bizygW, faceHeight);
       const rBi = safeRatioGeom(euclidean2D(p(M.BITEMPORAL_L), p(M.BITEMPORAL_R)), bizygW);
       const rCh = midCheek && p(M.MENTON) ? safeRatioGeom(euclidean2D(p(M.MENTON), midCheek), faceHeight) : NaN;
       const rBr = safeRatioGeom(euclidean2D(p(M.BROW_OUTER_L), p(M.BROW_OUTER_R)), bizygW);
@@ -520,7 +519,6 @@
         'Lower segment along Trichion–Menton (Subnasale projected) / Trichion–Menton',
         labelThirdRatio(rLow, 'lower third')
       );
-      pushR('fmTotalFWHR', 'Bizygomatic / facial height', rFw, 'Left zygoma–Right zygoma / Trichion–Menton', labelBizygOverFaceHeight(rFw));
       pushR('fmBitemporalOverBizyg', 'Bitemporal / bizygomatic width', rBi, 'Left temporal–Right temporal / Left zygoma–Right zygoma', labelBitemporalOverBizyg(rBi));
       pushR(
         'fmCheekboneHeight',
@@ -820,7 +818,6 @@
       Number.isFinite(tSn) && faceH > 0 ? pointAtDistAlongSegment(T, Me, Math.max(0, Math.min(tSn, faceH))) : null;
 
     drawFacialThirdsUnifiedOverlay(ctx, T, Me, PG, PSn, Gla, Sn, width, height);
-    drawMetricLineSet(ctx, 'fmTotalFWHR', [[g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)], [g(M.TRICHION), g(M.MENTON)]], width, height);
     drawMetricLineSet(ctx, 'fmBitemporalOverBizyg', [[g(M.BITEMPORAL_L), g(M.BITEMPORAL_R)], [g(M.BIZYGOMATIC_L), g(M.BIZYGOMATIC_R)]], width, height);
     if (midCheek) {
       drawMetricLineSet(ctx, 'fmCheekboneHeight', [[g(M.MENTON), midCheek], [g(M.TRICHION), g(M.MENTON)]], width, height);
@@ -890,16 +887,19 @@
     drawDot(ctx, rightInner, METRIC_ACCENT, opacity, dr());
 
     const leftCheek = g(LANDMARKS.LEFT_CHEEK), rightCheek = g(LANDMARKS.RIGHT_CHEEK);
-    const glabella = g(LANDMARKS.GLABELLA), philtrumTop = g(LANDMARKS.PHILTRUM_TOP);
+    const glabella = g(LANDMARKS.GLABELLA);
+    const upperLipTopFwhr = g(LANDMARKS.UPPER_LIP_TOP);
     key = 'fwhr';
     ({ opacity, lineWidth } = getOpacityAndLineWidth(key));
     lineOpacity = opacity;
     drawLine(ctx, leftCheek, rightCheek, METRIC_ACCENT, lw(lineWidth), lineOpacity);
-    drawLine(ctx, glabella, philtrumTop, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    if (upperLipTopFwhr) {
+      drawLine(ctx, glabella, upperLipTopFwhr, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    }
     drawDot(ctx, leftCheek, METRIC_ACCENT, opacity, dr());
     drawDot(ctx, rightCheek, METRIC_ACCENT, opacity, dr());
     drawDot(ctx, glabella, METRIC_ACCENT, opacity, dr());
-    drawDot(ctx, philtrumTop, METRIC_ACCENT, opacity, dr());
+    drawDot(ctx, upperLipTopFwhr, METRIC_ACCENT, opacity, dr());
 
     const leftIris = landmarks[LANDMARKS.LEFT_IRIS_CENTER];
     const rightIris = landmarks[LANDMARKS.RIGHT_IRIS_CENTER];
@@ -913,8 +913,10 @@
     const midY = (leftIrisP.y + rightIrisP.y) / 2;
     const midP = { x: (leftIrisP.x + rightIrisP.x) / 2, y: midY };
     drawLine(ctx, leftIrisP, rightIrisP, METRIC_ACCENT, lw(lineWidth), lineOpacity);
-    drawLine(ctx, midP, philtrumTop, METRIC_ACCENT, lw(lineWidth), lineOpacity);
-    drawDot(ctx, philtrumTop, METRIC_ACCENT, opacity, dr());
+    if (upperLipTopFwhr) {
+      drawLine(ctx, midP, upperLipTopFwhr, METRIC_ACCENT, lw(lineWidth), lineOpacity);
+    }
+    drawDot(ctx, upperLipTopFwhr, METRIC_ACCENT, opacity, dr());
 
     const jawP1 = g(LANDMARKS.LEFT_GONION), jawP2 = g(LANDMARKS.RIGHT_GONION);
     const leftGonionDraw = jawP1 && jawP2 && jawP1.x <= jawP2.x ? jawP1 : jawP2;
@@ -1392,35 +1394,38 @@
     });
 
     const leftCheek = g(LANDMARKS.LEFT_CHEEK), rightCheek = g(LANDMARKS.RIGHT_CHEEK);
-    const glabella = g(LANDMARKS.GLABELLA), philtrumTop = g(LANDMARKS.PHILTRUM_TOP);
+    const glabella = g(LANDMARKS.GLABELLA);
+    const upperLipTop = g(LANDMARKS.UPPER_LIP_TOP);
     const bizygomaticWidth = euclidean2D(leftCheek, rightCheek);
-    const upperFaceHeight = euclidean2D(glabella, philtrumTop);
+    const upperFaceHeight = glabella && upperLipTop ? euclidean2D(glabella, upperLipTop) : 0;
     const fWHR = upperFaceHeight > 0 ? bizygomaticWidth / upperFaceHeight : 0;
     metrics.push({
       key: 'fwhr',
       name: 'Facial Width–Height Ratio (fWHR)',
       value: fWHR.toFixed(2),
-      sub: 'Left zygoma–Right zygoma / Glabella–Upper lip superior (midline)',
-      label: fWHR >= 1.35 ? 'Wider' : fWHR <= 1.15 ? 'Narrower' : 'Medium',
+      sub: 'Left zygoma–Right zygoma / Glabella–Upper lip top (midline, landmark 0)',
+      label: labelFwhrRatio(fWHR),
     });
 
     const leftIris = landmarks[LANDMARKS.LEFT_IRIS_CENTER];
     const rightIris = landmarks[LANDMARKS.RIGHT_IRIS_CENTER];
     let midfaceRatio = 0;
-    if (leftIris && rightIris) {
-      const leftP = toPixel(leftIris, width, height);
-      const rightP = toPixel(rightIris, width, height);
-      const ipd = euclidean2D(leftP, rightP);
-      const midY = (leftP.y + rightP.y) / 2;
-      const pupilToLip = Math.abs(midY - philtrumTop.y);
-      midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
-    } else {
-      const leftMid = { x: (leftInner.x + leftOuter.x) / 2, y: (leftInner.y + leftOuter.y) / 2 };
-      const rightMid = { x: (rightInner.x + rightOuter.x) / 2, y: (rightInner.y + rightOuter.y) / 2 };
-      const ipd = euclidean2D(leftMid, rightMid);
-      const midY = (leftMid.y + rightMid.y) / 2;
-      const pupilToLip = Math.abs(midY - philtrumTop.y);
-      midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
+    if (upperLipTop) {
+      if (leftIris && rightIris) {
+        const leftP = toPixel(leftIris, width, height);
+        const rightP = toPixel(rightIris, width, height);
+        const ipd = euclidean2D(leftP, rightP);
+        const midY = (leftP.y + rightP.y) / 2;
+        const pupilToLip = Math.abs(midY - upperLipTop.y);
+        midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
+      } else {
+        const leftMid = { x: (leftInner.x + leftOuter.x) / 2, y: (leftInner.y + leftOuter.y) / 2 };
+        const rightMid = { x: (rightInner.x + rightOuter.x) / 2, y: (rightInner.y + rightOuter.y) / 2 };
+        const ipd = euclidean2D(leftMid, rightMid);
+        const midY = (leftMid.y + rightMid.y) / 2;
+        const pupilToLip = Math.abs(midY - upperLipTop.y);
+        midfaceRatio = pupilToLip > 0 ? ipd / pupilToLip : 0;
+      }
     }
     metrics.push({
       key: 'midfaceRatio',
